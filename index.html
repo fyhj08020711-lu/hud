@@ -354,6 +354,7 @@ h1{margin:0;font-size:2.2rem;font-weight:900;letter-spacing:.02em}
   </div>
 </div>
 
+<script src="config.js"></script>
 <script>
 (function(){
 "use strict";
@@ -515,7 +516,9 @@ function buildRoute(g){
 }
 
 /* ---------- Google（Routes API + Places API (New)） ---------- */
-function gKey(){return(store.get("hud.gkey","")||"").trim()}
+/* 金鑰：手機上自己貼的優先；沒有就用一鍵更新時寫進 config.js 的 */
+const CFG=window.HUD_KEYS||{};
+function gKey(){return(store.get("hud.gkey","")||CFG.google||"").trim()}
 function decodePolyline(str){
   const out=[];let i=0,lat=0,lng=0;
   while(i<str.length){
@@ -868,7 +871,7 @@ function setLimit(v,est,src){
 }
 
 /* ---------- TomTom 速限（每天 2,500 次免費；自己控量在 2,300 次內） ---------- */
-function ttKey(){return(store.get("hud.ttkey","")||"").trim()}
+function ttKey(){return(store.get("hud.ttkey","")||CFG.tomtom||"").trim()}
 let ttBusy=false,ttQ={t:0,lat:0,lon:0},ttFail=0;
 function ttCount(add){
   const d=new Date().toDateString();let c=store.get("hud.ttcount",{d,n:0});
