@@ -146,7 +146,10 @@ h1{margin:0;font-size:2.2rem;font-weight:900;letter-spacing:.02em}
 /* 強光模式：所有字最亮、不透明、筆畫加粗，箭頭線條加粗 */
 #hud.sun .cell small,#hud.sun #then,#hud.sun #hstat,#hud.sun #src,#hud.sun #traffic .tl,#hud.sun #traffic .td,
 #hud.sun .mile,#hud.sun .so .clk,#hud.sun #rem small,#hud.sun .h-bot{opacity:1!important}
-#hud.sun #hi{-webkit-text-stroke:calc(.35vmin*var(--k)) currentColor;font-weight:900}
+/* 只替「數字」描邊加粗；中文筆畫多，描邊會糊成一團，改用最粗字重＋拉開字距 */
+#hud.sun #spd,#hud.sun #spd2,#hud.sun .h-dist .n,#hud.sun #eta,#hud.sun #rem{-webkit-text-stroke:calc(.25vmin*var(--k)) currentColor}
+#hud.sun #hi{font-weight:900}
+#hud.sun #road,#hud.sun #act,#hud.sun #then,#hud.sun #traffic .tl{letter-spacing:.06em}
 #hud.sun #arrow .s{stroke-width:15}
 #hud.sun .h-bot{border-top-width:1vmin}
 #hud.sun .lim{border-width:calc(2vmin*var(--k))}
