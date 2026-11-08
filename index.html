@@ -157,6 +157,7 @@ h1{margin:0;font-size:2.2rem;font-weight:900;letter-spacing:.02em}
 /* 時速下方：國道里程與方向，例：國1 南下 32.4K */
 .mile{font-family:var(--f-num);font-weight:700;font-size:calc(5.5vmin*var(--k));color:var(--hud);white-space:nowrap;line-height:1.1;margin-top:.6vmin}
 .mile.big{font-size:calc(8vmin*var(--k))}
+#spd.est,#spd2.est{opacity:.55}
 .mile:empty{display:none}
 
 /* 測速照相提醒（橘色） */
@@ -769,6 +770,7 @@ function queryLimit(lat,lon){
   const now=Date.now(),moved=distM(lat,lon,limQ.lat,limQ.lon);
   if(now-limQ.t<15000||(moved<250&&now-limQ.t<60000))return;  /* 省電：最快 15 秒查一次；移動不到 250 公尺就等 60 秒 */
   limQ={t:now,lat,lon};limitBusy=true;
+  const odoQ=odo,hdQ=heading;
   const LL=`${lat.toFixed(6)},${lon.toFixed(6)}`;
   /* 里程牌只在國道／快速道路上才一起查，平常只查附近道路（快很多） */
   const wantMs=/^(motorway|trunk)/.test(road.hw);
@@ -794,7 +796,10 @@ function queryLimit(lat,lon){
       if(best)LS.osm={v:best,est:false,at:Date.now()};
       else if(near)LS.osm={v:defaultLimit(near.highway),est:true,at:Date.now()};
       decideLimit();
-      road={ref:near?(near.ref||""):"",hw:near?(near.highway||""):"",km:null,t:Date.now()};
+      const prev=road;
+      road={ref:near?(near.ref||""):"",hw:near?(near.highway||""):"",km:null,t:Date.now(),odo0:odoQ,sign:0};
+      /* 這次沒查到里程牌，但還在同一條國道 → 沿用上次的里程繼續推算 */
+      if(prev&&prev.km!=null&&prev.sign&&prev.ref&&prev.ref===road.ref){road.km=prev.km;road.sign=prev.sign;road.odo0=prev.odo0}
       /* 只有國道、快速道路才算里程：取最近兩塊里程牌內插 */
       if(/^(motorway|trunk)/.test(road.hw)&&ms.length){
         ms.sort((a,b)=>a.d-b.d);
@@ -805,6 +810,11 @@ function queryLimit(lat,lon){
             if(m1.d+m2.d<=span*1.15) road.km=m1.k+(m2.k-m1.k)*m1.d/(m1.d+m2.d);      /* 在兩塊牌子中間 */
             else road.km=m1.k+(m1.k-m2.k)/span*m1.d;                                  /* 在外側 */
           }else road.km=m1.k;
+          /* 里程是往哪個方向增加：與行進方向比對，之後依行駛距離連續推算 */
+          if(m2&&hdQ!=null){
+            const lo=m1.k<m2.k?m1:m2,hi=m1.k<m2.k?m2:m1;
+            road.sign=angDiff(bearing(lo.lat,lo.lon,hi.lat,hi.lon),hdQ)<90?1:-1;
+          }
         }
       }
       renderMile();
@@ -836,10 +846,13 @@ function setHeadingFrom(a1,o1,a2,o2){
 }
 function renderMile(){
   let t="";
-  if(road.ref&&Date.now()-road.t<90000){
+  const fresh=Date.now()-road.t<90000||(drT&&Date.now()-road.t<900000);   /* 隧道中沿用 */
+  if(road.ref&&fresh){
     let ref=road.ref.split(";")[0].trim();
     if(/^\d+$/.test(ref))ref=(road.hw.startsWith("motorway")?"國":"台")+ref;
-    t=[ref,dirName(heading),road.km!=null?road.km.toFixed(1)+"K":""].filter(Boolean).join(" ");
+    let km=road.km;
+    if(km!=null&&road.sign)km+=road.sign*(odo-road.odo0)/1000;   /* 兩次查詢之間依行駛距離連續推算 */
+    t=[ref,dirName(heading),km!=null?km.toFixed(1)+"K":""].filter(Boolean).join(" ");
   }
   $("mile").textContent=t;$("mile2").textContent=t;
 }
@@ -994,7 +1007,7 @@ async function enterHud(){
   $("hud").classList.toggle("speedonly",mode==="speed");
   $("hud").classList.remove("turn-now","turn-near","over");
   limit=null;limitAt=0;limQ={t:0,lat:0,lon:0};lastLimSaid=null;renderLimit();
-  heading=null;road={ref:"",hw:"",km:null,t:0};renderMile();
+  heading=null;road={ref:"",hw:"",km:null,t:0};odo=0;lastAlong=null;drSpeed=0;drReset();renderMile();
   LS.cam=LS.tt=LS.osm=null;camNear=null;ttFail=0;ttQ={t:0,lat:0,lon:0};renderCam();loadCams();
   $("cFast").hidden=!sim;
   $("dist").innerHTML="--";$("act").textContent="準備中";$("road").textContent="取得位置中…";$("then").textContent="";$("traffic").textContent="";$("traffic").className="";
@@ -1016,10 +1029,23 @@ document.addEventListener("visibilitychange",async()=>{
   if(document.visibilityState==="visible"&&mode&&!wake){try{wake=await navigator.wakeLock.request("screen")}catch(e){}}
   if(document.visibilityState!=="visible")wake=null;
 });
+/* ---------- 隧道／沒有 GPS：用最後車速沿路線推估（例：雪山隧道 12.9 km） ---------- */
+let odo=0,lastAlong=null,drSpeed=0,drT=0,drAlong=null;
 function tick(){
   $("clk").textContent=hhmm(new Date());
-  if(lastFix&&!sim&&Date.now()-lastFix.t>6000){setSpeed(null);hstat("GPS 訊號弱")}
+  if(!lastFix||sim)return;
+  const now=Date.now(),gap=(now-lastFix.t)/1000;
+  if(gap<=3){drSpeed=speedKmh||0;return}
+  if(drSpeed>15&&gap<900){                       /* 最多推估 15 分鐘 */
+    const dt=(now-(drT||lastFix.t))/1000;drT=now;
+    const m=drSpeed/3.6*dt;odo+=m;
+    setSpeed(drSpeed);$("spd").classList.add("est");$("spd2").classList.add("est");
+    hstat("無 GPS（隧道）：時速與位置為推估");
+    if(mode==="nav"&&route&&!arrived&&lastAlong!=null){drAlong=(drAlong==null?lastAlong:drAlong)+m;update(0,0,drAlong)}
+    renderMile();
+  }else if(gap>6){setSpeed(null);hstat("GPS 訊號弱")}
 }
+function drReset(){drT=0;drAlong=null;$("spd").classList.remove("est");$("spd2").classList.remove("est")}
 
 /* 操作列 */
 let ctlTimer=null;
@@ -1055,6 +1081,8 @@ function onPos(p){
   else v=speedKmh==null?v:speedKmh*0.4+v*0.6;
   if(c.heading!=null&&!isNaN(c.heading)&&v>5)heading=c.heading;
   else if(lastFix&&v>5)setHeadingFrom(lastFix.lat,lastFix.lon,c.latitude,c.longitude);
+  if(lastFix&&!drAlong&&(c.accuracy||0)<50)odo+=Math.min(distM(lastFix.lat,lastFix.lon,c.latitude,c.longitude),v/3.6*((now-lastFix.t)/1000)+30);
+  drReset();
   lastFix={lat:c.latitude,lon:c.longitude,t:now};
   setSpeed(v);
   queryLimit(c.latitude,c.longitude);queryTT(c.latitude,c.longitude);checkCams(c.latitude,c.longitude);
@@ -1095,6 +1123,7 @@ function update(lat,lon,knownAlong){
     /* 每 5 分鐘悄悄更新一次路線，取得最新路況與抵達時間 */
     else if(route.src==="google"&&route.t&&Date.now()-route.t>300000){route.t=Date.now();requestRoute({lat,lon},true,true)}
   }
+  lastAlong=along;
   const remain=Math.max(0,route.total-along);
   if(remain<25){
     arrived=true;
@@ -1186,7 +1215,7 @@ $("bSim").onclick=async()=>{
     const top=T().sim;
     const target=toTurn<40?Math.min(top,18):toTurn<120?Math.min(top,32):top*(1+Math.sin(Date.now()/4000)*0.1);
     simV+=(target-simV)*0.08;
-    simAlong+=simV/3.6*0.25*simMul;
+    simAlong+=simV/3.6*0.25*simMul;odo=simAlong;
     setSpeed(simV);
     const p=pointAt(route,simAlong);
     const p2=pointAt(route,simAlong+25);setHeadingFrom(p.lat,p.lon,p2.lat,p2.lon);
